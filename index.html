@@ -1,0 +1,215 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>MapBuilder — Enhanced View</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+
+    #backButton {
+    position: fixed;
+    top: 100px;         /* Moved down from 20px to 100px */
+    left: 20px;
+    background: #1e1e1e;
+    color: #00eaff;
+    padding: 10px 18px;
+    border-radius: 6px;
+    text-decoration: none;
+    font-weight: bold;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.5);
+    transition: 0.3s;
+    z-index: 1000;
+}
+
+#backButton:hover {
+    background: #00eaff;
+    color: #0b0f12;
+}
+
+
+
+    html,body,#map{height:100%;margin:0;background:#07090b;color:#ddd;font-family:Inter,system-ui}
+    .controls{position:absolute;left:12px;top:12px;z-index:1000}
+    .search{backdrop-filter: blur(6px); background: rgba(10,12,14,0.6); padding:10px;border-radius:10px}
+    input{background:transparent;border:1px solid #2a2f33;padding:8px;color:#eee;border-radius:6px;width:320px}
+    button{margin-left:6px;padding:8px;border-radius:6px;background:#111214;color:#fff;border:none}
+    .hint{margin-top:6px;color:#9aa0a6;font-size:12px}
+    .leaflet-popup-content-wrapper { background: #0b0f12; color: #ddd; border-radius: 8px; }
+    .leaflet-control-layers { background: rgba(8,9,10,0.85); color: #ddd; }
+  </style>
+</head>
+<body>
+
+  <div id="map"></div>
+
+  <div class="controls">
+    <div class="search">
+      <input id="q" placeholder="Search country / continent / place (e.g. Uganda, Africa, Europe)" />
+      <button id="go">Go</button>
+      <button id="world">World</button>
+      <div class="hint">Press Enter to search • Double-click to zoom</div>
+    </div>
+  </div>
+    <a href="welcome.html" id="backButton">⬅ Back</a>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    // base map
+    const map = L.map('map', { zoomControl:true }).setView([20,0], 2);
+    const darkTiles = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png', {
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    // --- Built-in major cities GeoJSON (small sample) ---
+    const citiesGeoJSON = {
+      "type":"FeatureCollection",
+      "features":[
+        {"type":"Feature","properties":{"name":"New York, USA","pop":"8.4M"},"geometry":{"type":"Point","coordinates":[-74.0060,40.7128]}},
+        {"type":"Feature","properties":{"name":"London, UK","pop":"9.0M"},"geometry":{"type":"Point","coordinates":[-0.1276,51.5074]}},
+        {"type":"Feature","properties":{"name":"Tokyo, Japan","pop":"14M"},"geometry":{"type":"Point","coordinates":[139.6917,35.6895]}},
+        {"type":"Feature","properties":{"name":"Nairobi, Kenya","pop":"4.4M"},"geometry":{"type":"Point","coordinates":[36.8219,-1.2921]}},
+        {"type":"Feature","properties":{"name":"Kampala, Uganda","pop":"1.7M"},"geometry":{"type":"Point","coordinates":[32.5825,0.3476]}},
+        {"type":"Feature","properties":{"name":"Sydney, Australia","pop":"5.3M"},"geometry":{"type":"Point","coordinates":[151.2093,-33.8688]}},
+        {"type":"Feature","properties":{"name":"Paris, France","pop":"2.1M"},"geometry":{"type":"Point","coordinates":[2.3522,48.8566]}},
+        {"type":"Feature","properties":{"name":"Cairo, Egypt","pop":"9.5M"},"geometry":{"type":"Point","coordinates":[31.2357,30.0444]}},
+        {"type":"Feature","properties":{"name":"Beijing, China","pop":"21M"},"geometry":{"type":"Point","coordinates":[116.4074,39.9042]}},
+        {"type":"Feature","properties":{"name":"Moscow, Russia","pop":"12.5M"},"geometry":{"type":"Point","coordinates":[37.6173,55.7558]}},
+        {"type":"Feature","properties":{"name":"Rio de Janeiro, Brazil","pop":"6.7M"},"geometry":{"type":"Point","coordinates":[-43.1729,-22.9068]}}
+      ]
+    };
+
+    // city marker style & label
+    function cityPointToLayer(feature, latlng) {
+      const marker = L.circleMarker(latlng, {
+        radius: 8,
+        weight: 1,
+        opacity: 1,
+        fillOpacity: 0.9
+      });
+      const name = feature.properties.name || "City";
+      const pop = feature.properties.pop ? (" — pop: " + feature.properties.pop) : "";
+      marker.bindPopup(`<strong>${name}</strong><div style="font-size:12px;color:#9aa0a6">${pop}</div>`);
+      return marker;
+    }
+
+    // cities layer
+    const citiesLayer = L.geoJSON(citiesGeoJSON, { pointToLayer: cityPointToLayer });
+
+    // COUNTRY BORDERS layer (load remote GeoJSON)
+    // small note: this fetches a public repo GeoJSON of world countries. It requires internet.
+    // For production/large traffic run your own hosted GeoJSON or serve it from your backend.
+    const countriesGeoJsonUrl = 'https://raw.githubusercontent.com/johan/world.geo.json/master/countries.geo.json';
+    let bordersLayer = L.layerGroup(); // placeholder; will be replaced once loaded
+
+    async function loadBorders() {
+      try {
+        const res = await fetch(countriesGeoJsonUrl);
+        if(!res.ok) throw new Error('Failed to load borders');
+        const geo = await res.json();
+        // style and create layer
+        bordersLayer = L.geoJSON(geo, {
+          style: function(feature){
+            return { color: '#6dd3ff', weight: 1, opacity: 0.8, fill: false };
+          },
+          onEachFeature: function (feature, layer) {
+            const n = feature.properties && (feature.properties.name || feature.properties.NAME);
+            if(n) layer.bindPopup(`<strong>${n}</strong>`);
+          }
+        });
+        // add to control if currently toggled on by user — the control will replace with actual layer
+        if (layersControl && layersControl._lastRequestedShow && layersControl._lastRequestedShow.indexOf("Borders") !== -1) {
+          // see note below about layers control replacement
+        }
+      } catch(e) {
+        console.warn('Could not load country borders:', e);
+      }
+    }
+    // call load in background (it will be used when user toggles)
+    loadBorders();
+
+    // Basic roads overlay: optional tile overlay (transparent road labels)
+    // We'll use OpenStreetMap standard tiles as a lightweight "road detail" overlay when toggled on
+    const roadsTiles = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {opacity:0.65});
+
+    // Layer control
+    const baseMaps = { "Dark": darkTiles };
+    const overlayMaps = { "Cities": citiesLayer, "Borders (load online)": bordersLayer, "Roads (OSM overlay)": roadsTiles };
+
+    // create control — we'll add and update it later after borders fully fetched
+    let layersControl = L.control.layers(baseMaps, overlayMaps, { collapsed: false }).addTo(map);
+
+    // hack: when borders are not fully loaded yet, user toggling will replace placeholder with the real layer when loaded
+    // Keep track of toggles to add borders when load finishes
+    layersControl._lastRequestedShow = [];
+
+    // intercept user's layer add events — track which overlays user enabled
+    map.on('overlayadd', function(e) {
+      layersControl._lastRequestedShow.push(e.name || e.layer && e.layer.options && e.layer.options.name || e.layer);
+      const n = e.name || (e.layer && e.layer.options && e.layer.options.name);
+      if (n && n.toString().includes('Borders') && bordersLayer && bordersLayer.feature) {
+        // borders already loaded; remove placeholder and add real borders
+        if (map.hasLayer(bordersLayer) === false) {
+          // nothing — already handled
+        }
+      }
+    });
+
+    // When loadBorders completes, replace the placeholder in the control with the real layer
+    // We'll re-create the layers control after load completes so it contains the real bordersLayer object.
+    async function refreshControlAfterBorders() {
+      await loadBorders();
+      // remove previous control and create a new one with the real borders layer object
+      try { layersControl.remove(); } catch(e) {}
+      const newOverlayMaps = { "Cities": citiesLayer, "Borders (load online)": bordersLayer, "Roads (OSM overlay)": roadsTiles };
+      layersControl = L.control.layers(baseMaps, newOverlayMaps, { collapsed: false }).addTo(map);
+      // if the user had previously toggled borders on, add them now
+      if (layersControl._lastRequestedShow && layersControl._lastRequestedShow.indexOf("Borders") !== -1) {
+        map.addLayer(bordersLayer);
+      }
+    }
+    // refresh after a short delay so initial UI loads fast
+    setTimeout(refreshControlAfterBorders, 1200);
+
+    // Add cities by default
+    citiesLayer.addTo(map);
+
+    // --- Geocoding (Nominatim) ---
+    async function geocode(q) {
+      const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&limit=1`;
+      const r = await fetch(url,{headers:{'Accept':'application/json'}});
+      const j = await r.json();
+      return j[0];
+    }
+
+    document.getElementById('go').onclick = async ()=> {
+      const q = document.getElementById('q').value.trim();
+      if(!q) return;
+      const res = await geocode(q);
+      if(!res) { alert('Not found'); return; }
+      const lat = parseFloat(res.lat), lon = parseFloat(res.lon);
+      if(res.boundingbox){
+        const bb = res.boundingbox.map(Number);
+        // Nominatim boundingbox: [south, north, west, east] OR sometimes W/E positions - but this usually works:
+        const south = bb[0], north = bb[1], west = bb[2], east = bb[3];
+        map.fitBounds([[south, west],[north, east]], { maxZoom: 8 });
+      } else {
+        map.setView([lat,lon], 8);
+      }
+      // add a temporary marker
+      if(window._lastSearchMarker) map.removeLayer(window._lastSearchMarker);
+      window._lastSearchMarker = L.circleMarker([lat,lon], { radius: 9, color: '#ffd166', weight:2}).addTo(map).bindPopup(res.display_name).openPopup();
+    };
+
+    // Enter key triggers search
+    document.getElementById('q').addEventListener('keydown', (e)=>{ if(e.key==="Enter") document.getElementById('go').click(); });
+
+    // World button
+    document.getElementById('world').onclick = ()=>{ map.setView([20,0],2); if(window._lastSearchMarker) map.removeLayer(window._lastSearchMarker); };
+
+    // small UI: show scale and fullscreen control
+    L.control.scale({imperial:false, metric:true}).addTo(map);
+    // fullscreen plugin would need extra CSS/JS - skipping to keep single-file
+
+  </script>
+</body>
+</html>
